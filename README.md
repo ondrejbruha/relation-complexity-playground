@@ -85,8 +85,21 @@ python main.py --mode families --min-n 3 --max-n 35 --families cycle cube peters
 
 Available families are paths, cycles, complete graphs, balanced complete bipartite
 graphs, Petersen, hypercubes, square rook graphs `L(K(s,s))`, and odd Kneser graphs
-`KG(2k+1,k)`. Their order is the number of graph vertices: a hypercube has `2^d`
+`KG(2k+1,k)`, plus explicitly selected Grassmann graphs `J_q(d,k)`.
+Their order is the number of graph vertices: a hypercube has `2^d`
 vertices, a square rook graph `s²`, and an odd Kneser graph `binom(2k+1,k)`.
+
+Grassmann parameters specify field size, ambient dimension, and subspace dimension;
+`--max-n` still bounds the number of graph vertices:
+
+```sh
+python main.py --mode families --families grassmann --grassmann 2,4,2 --max-n 35 --output results/grassmann
+python main.py --mode families --families grassmann --grassmann 2,4,2 2,5,2 2,6,2 --max-n 651 --generate-only --output results/grassmann-graphs
+```
+
+The second command writes graphs without computing rc. Generation is fast, while
+the generic rc solver may reach limits even at 35 vertices. Prime-power fields
+are supported without additional dependencies. [Grassmann guide](docs/grassmann.md).
 
 Other examples:
 
@@ -191,7 +204,8 @@ not certified global maxima for those larger orders.
 ## Project layout
 
 `main.py` is the CLI entry point, `experiment.py` manages experiments and exports,
-and `relational_complexity.py` contains the computation API.
+`relational_complexity.py` contains the computation API, and `grassmann.py`
+constructs Grassmann graphs over finite fields.
 `gpt_rc_brute_force.py` is a historical k-closure draft; it does not compute this
 project's structural relational complexity. See [the algorithm note](docs/algorithm.md).
 

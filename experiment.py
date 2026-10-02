@@ -19,9 +19,12 @@ import urllib.request
 
 import networkx as nx
 
+from grassmann import (DEFAULT_MAX_VERTICES, DEFAULT_PARAMETERS, grassmann_graph,
+                       grassmann_order, parse_parameters)
 from relational_complexity import ENGINE_VERSION, compute_relational_complexity
 
-FAMILIES = ("path", "cycle", "complete", "bipartite", "petersen", "rook", "cube", "kneser")
+DEFAULT_FAMILIES = ("path", "cycle", "complete", "bipartite", "petersen", "rook", "cube", "kneser")
+FAMILIES = (*DEFAULT_FAMILIES, "grassmann")
 CATALOG_COUNTS = {8: 12_346, 9: 274_668}
 CATALOG_URL = "https://users.cecs.anu.edu.au/~bdm/data/graph{n}.g6"
 
@@ -46,6 +49,8 @@ def _signature(args) -> dict:
         signature.update(seed=args.seed, probability=args.p)
     elif args.mode == "families":
         signature["families"] = sorted(set(args.families))
+        if "grassmann" in args.families:
+            signature["grassmann"] = [list(spec) for spec in sorted(set(args.grassmann))]
     elif args.mode == "graph6":
         digest = hashlib.sha256()
         with args.input.open("rb") as stream:
@@ -86,8 +91,14 @@ def open_database(path: Path, signature: dict) -> sqlite3.Connection:
             if previous.get("mode") == requested.get("mode") == "families":
                 old_identity.pop("families", None)
                 new_identity.pop("families", None)
+                old_identity.pop("grassmann", None)
+                new_identity.pop("grassmann", None)
                 requested["families"] = sorted(set(previous.get("families", []))
                                                | set(requested.get("families", [])))
+                specifications = {tuple(spec) for spec in previous.get("grassmann", [])}
+                specifications.update(tuple(spec) for spec in requested.get("grassmann", []))
+                if specifications:
+                    requested["grassmann"] = [list(spec) for spec in sorted(specifications)]
             if old_identity != new_identity:
                 differences = [f"{key}: stored={old_identity.get(key)!r}, requested={new_identity.get(key)!r}"
                                for key in sorted(old_identity.keys() | new_identity.keys())
@@ -173,10 +184,21 @@ def tasks(args, db):
                 seed = int.from_bytes(hashlib.sha256(f"{args.seed}:{n}:{sample}".encode()).digest()[:8], "big")
                 yield make(f"random:{n}:{sample}", nx.gnp_random_graph(n, args.p, seed=seed), f"sample {sample}")
     elif args.mode == "families":
+        grassmann_by_order = {}
+        if "grassmann" in args.families:
+            for spec in sorted(set(args.grassmann)):
+                order = grassmann_order(*spec)
+                if args.min_n <= order <= args.max_n:
+                    grassmann_by_order.setdefault(order, []).append(spec)
         for n in range(args.min_n, args.max_n + 1):
             for family in sorted(set(args.families)):
                 label = family
-                if family == "path":
+                if family == "grassmann":
+                    for q, d, k in grassmann_by_order.get(n, []):
+                        graph = grassmann_graph(q, d, k, max_vertices=args.grassmann_max_vertices)
+                        yield make(f"family:grassmann:v1:{q}:{d}:{k}", graph, f"J_{q}({d},{k})")
+                    continue
+                elif family == "path":
                     graph = nx.path_graph(n)
                 elif family == "cycle" and n >= 3:
                     graph = nx.cycle_graph(n)
@@ -382,6 +404,12 @@ def export(db, directory, mode):
 
 
 def parser():
+    def grassmann_parameters(value):
+        try:
+            return parse_parameters(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--mode", choices=("atlas", "catalog", "random", "families", "circulant", "graph6", "geng"), default="atlas")
     result.add_argument("--min-n", type=int, default=1)
@@ -389,7 +417,13 @@ def parser():
     result.add_argument("--samples", type=int, default=100, help="Random samples / circulant masks per order")
     result.add_argument("--p", type=float, default=0.3)
     result.add_argument("--seed", type=int, default=42)
-    result.add_argument("--families", nargs="+", choices=FAMILIES, default=list(FAMILIES))
+    result.add_argument("--families", nargs="+", choices=FAMILIES, default=list(DEFAULT_FAMILIES))
+    result.add_argument("--grassmann", nargs="+", type=grassmann_parameters, default=list(DEFAULT_PARAMETERS),
+                        metavar="q,d,k", help="Grassmann parameter triples; default: 2,4,2")
+    result.add_argument("--grassmann-max-vertices", type=int, default=DEFAULT_MAX_VERTICES,
+                        help="Maximum vertices per constructed Grassmann graph; default: 2000")
+    result.add_argument("--generate-only", action="store_true",
+                        help="Write selected families to graphs.g6 and graphs.csv without computing rc")
     result.add_argument("--input", type=Path, help="graph6 file")
     result.add_argument("--geng", default="geng", help="Path to nauty geng executable")
     result.add_argument("--connected", action="store_true", help="Connected atlas/geng/graph6 graphs only")
@@ -422,7 +456,39 @@ def main(argv=None):
         arguments.error("--mode graph6 requires --input")
     if args.connected and args.mode not in ("atlas", "catalog", "geng", "graph6"):
         arguments.error("--connected requires atlas, catalog, geng or graph6")
+    if args.generate_only and (args.mode != "families" or args.plot_only):
+        arguments.error("--generate-only requires --mode families and cannot be combined with --plot-only")
+    if args.grassmann_max_vertices < 1:
+        arguments.error("--grassmann-max-vertices must be positive")
+    if not args.plot_only and args.mode == "families" and "grassmann" in args.families:
+        selected = [(spec, grassmann_order(*spec)) for spec in sorted(set(args.grassmann))]
+        for spec, order in selected:
+            if args.min_n <= order <= args.max_n and order > args.grassmann_max_vertices:
+                arguments.error(f"J_{spec[0]}({spec[1]},{spec[2]}) has {order} vertices, exceeding "
+                                "--grassmann-max-vertices; increase the construction limit explicitly")
+        if set(args.families) == {"grassmann"} and not any(
+                args.min_n <= order <= args.max_n for _, order in selected):
+            arguments.error("No selected Grassmann graph fits --min-n/--max-n; selected vertex counts: "
+                            + ", ".join(str(order) for _, order in selected))
     args.output.mkdir(parents=True, exist_ok=True)
+    if args.generate_only:
+        try:
+            records = []
+            temporary = args.output / "graphs.g6.tmp"
+            with temporary.open("w", encoding="ascii", newline="\n") as stream:
+                for index, task in enumerate(tasks(args, None), 1):
+                    graph = nx.from_graph6_bytes(task["graph6"].encode("ascii"))
+                    stream.write(task["graph6"] + "\n")
+                    records.append({"index": index, "task_id": task["task_id"], "label": task["label"],
+                                    "n": len(graph), "edges": graph.number_of_edges()})
+            if not records:
+                raise ValueError("No family graphs fit the selected vertex range")
+            _csv(args.output / "graphs.csv", records)
+            temporary.replace(args.output / "graphs.g6")
+        except (ValueError, OSError) as exc:
+            arguments.error(str(exc))
+        print(f"Generated {len(records)} graphs without computing rc. Outputs: {args.output.resolve()}")
+        return 0
     database_path = args.output / "experiment.sqlite"
     if args.plot_only and not database_path.exists():
         arguments.error("No existing experiment.sqlite in --output")
@@ -442,7 +508,9 @@ def main(argv=None):
     if args.mode == "families":
         stored_signature = json.loads(db.execute("SELECT value FROM metadata WHERE key='signature'").fetchone()[0])
         saved_families = stored_signature.get("families", [])
-        if set(saved_families) != set(args.families):
+        saved_grassmann = {tuple(spec) for spec in stored_signature.get("grassmann", [])}
+        if set(saved_families) != set(args.families) or (
+                "grassmann" in args.families and saved_grassmann != set(args.grassmann)):
             print("Previous family results are retained; exports include all saved families. "
                   "Current task selection: " + ", ".join(sorted(set(args.families))), flush=True)
     stopped = False

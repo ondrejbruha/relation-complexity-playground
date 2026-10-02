@@ -104,6 +104,8 @@ rodin; samotná jedna rodina nemůže určit globální maximum.
 - `petersen`: Petersenův graf na 10 vrcholech.
 - `kneser`: liché Kneserovy grafy KG(2k+1,k), k >= 2; v rozsahu do 35 jde
   o KG(5,2) a KG(7,3). Kneserovo N **není** parametr k, ale binom(2k+1,k).
+- `grassmann`: grafy J_q(d,k) nad konečným tělesem GF(q), kde q je mocnina
+  prvočísla. Je potřeba je výslovně vybrat; nejsou ve výchozím seznamu rodin.
 - `path`, `complete`, `bipartite`: další kontrolní rodiny; poslední znamená
   K(floor(N/2),ceil(N/2)).
 
@@ -124,6 +126,36 @@ ke kontrole nebo studiu typických hodnot, nikoli jako hlavní hledání maxima:
 ```powershell
 .venv\Scripts\python.exe main.py --mode random --min-n 5 --max-n 30 --samples 100 --p 0.3 --seed 42 --workers 4 --output results/random
 ```
+
+## Grassmannovy grafy
+
+Parametry `q,d,k` znamenají velikost tělesa, dimenzi okolního prostoru a dimenzi
+podprostorů. `--max-n` se stále vztahuje k počtu vrcholů: J_2(4,2) má 35,
+J_2(5,2) má 155 a J_2(6,2) má 651 vrcholů.
+
+Výpočet s průběžným ukládáním a vykreslením:
+
+```powershell
+python main.py --mode families --families grassmann --grassmann 2,4,2 --max-n 35 --workers 1 --timeout 30 --output results/grassmann
+```
+
+Pouze vygenerování grafů bez drahého výpočtu komplexity:
+
+```powershell
+python main.py --mode families --families grassmann --grassmann 2,4,2 2,5,2 2,6,2 --max-n 651 --generate-only --output results/grassmann-graphs
+```
+
+Vznikne `graphs.g6` a `graphs.csv` s názvy, počty vrcholů a hran. Generátor zvládá
+i tělesa s neprvočíselným počtem prvků, například GF(4), bez dalších závislostí. Výchozí limit
+konstrukce je 2 000 vrcholů na graf; lze jej zvýšit pomocí `--grassmann-max-vertices`.
+Výběr parametrů lze ve stejném výstupním adresáři rozšířit; dřívější výsledky
+zůstávají v databázi a exportech. Nedokončené výpočty opakuje `--retry-incomplete`.
+
+Generování tří uvedených grafů při místním ověření trvalo méně než sekundu.
+J_2(4,2) však při výpočtu rc narazil na limit 30 sekund již při enumeraci
+automorfismů. Uložily se pouze meze 1 <= rc <= 34. Pro smysluplné přesné výsledky
+větších grafů bude potřeba rychlejší backend grupové akce. Podrobnosti, nebinární
+příklady a Python API jsou v [docs/grassmann.md](docs/grassmann.md).
 
 ## Větší úplné enumerace a vlastní katalogy
 

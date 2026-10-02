@@ -1,4 +1,5 @@
 import contextlib
+import csv
 import io
 import json
 from pathlib import Path
@@ -14,6 +15,59 @@ import experiment
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_generate_grassmann_graphs_without_complexity_search(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            with contextlib.redirect_stdout(io.StringIO()), patch.object(
+                    experiment, "_worker", side_effect=AssertionError("Unexpected rc computation")):
+                self.assertEqual(experiment.main([
+                    "--mode", "families", "--families", "grassmann", "--grassmann", "2,4,2", "2,5,2",
+                    "--max-n", "155", "--generate-only", "--output", str(output)]), 0)
+            graphs = list(nx.read_graph6(output / "graphs.g6"))
+            self.assertEqual([(len(g), g.number_of_edges()) for g in graphs], [(35, 315), (155, 3255)])
+            with (output / "graphs.csv").open(encoding="utf-8", newline="") as stream:
+                records = list(csv.DictReader(stream))
+            self.assertEqual([r["label"] for r in records], ["J_2(4,2)", "J_2(5,2)"])
+            self.assertFalse((output / "experiment.sqlite").exists())
+
+    def test_grassmann_parameter_selection_resumes_and_distinguishes_same_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            args = ["--mode", "families", "--families", "grassmann", "--max-n", "7",
+                    "--workers", "1", "--output", str(output)]
+            with contextlib.redirect_stdout(io.StringIO()), patch.object(experiment, "export"):
+                legacy = ["--mode", "families", "--families", "cycle", "--min-n", "3", "--max-n", "3",
+                          "--workers", "1", "--output", str(output)]
+                self.assertEqual(experiment.main(legacy), 0)
+                self.assertEqual(experiment.main(args + ["--grassmann", "2,3,1"]), 0)
+                with patch.object(experiment, "_worker", side_effect=AssertionError("Cached graph recomputed")):
+                    self.assertEqual(experiment.main(args + ["--grassmann", "2,3,2"]), 0)
+                    self.assertEqual(experiment.main(args + ["--grassmann", "2,3,1", "2,3,2"]), 0)
+                self.assertEqual(experiment.main(args + ["--grassmann", "4,2,1"]), 0)
+                with patch.object(experiment, "_worker", side_effect=AssertionError("Cached cycle recomputed")):
+                    self.assertEqual(experiment.main(legacy), 0)
+            with contextlib.closing(sqlite3.connect(output / "experiment.sqlite")) as db:
+                records, _ = experiment.summaries(db)
+                self.assertEqual(len(records), 4)
+                self.assertEqual({r["label"] for r in records}, {"cycle", "J_2(3,1)", "J_2(3,2)", "J_4(2,1)"})
+                self.assertTrue(all(r["rc"] == 0 for r in records))
+                signature = json.loads(db.execute("SELECT value FROM metadata WHERE key='signature'").fetchone()[0])
+                self.assertEqual(signature["families"], ["cycle", "grassmann"])
+                self.assertEqual(signature["grassmann"], [[2, 3, 1], [2, 3, 2], [4, 2, 1]])
+
+    def test_grassmann_range_and_construction_errors_precede_database_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            base = ["--mode", "families", "--families", "grassmann", "--output", str(output)]
+            for options in ([], ["--grassmann", "6,4,2", "--max-n", "35"],
+                            ["--max-n", "35", "--grassmann-max-vertices", "34"],
+                            ["--max-n", "35", "--generate-only", "--plot-only"]):
+                with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(
+                        SystemExit) as raised:
+                    experiment.main(base + options)
+                self.assertEqual(raised.exception.code, 2)
+            self.assertFalse((output / "experiment.sqlite").exists())
+
     def test_stop_resume_and_skip_completed_graphs(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)

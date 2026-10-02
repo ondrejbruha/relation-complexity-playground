@@ -8,6 +8,8 @@ Initial public-release preparation:
 - Bitset intersections, pair-orbit reduction, and per-graph CPU parallelism.
 - Exact atlas/catalogue experiments, named families, circulants, random graphs,
   graph6 input, and an external `geng` streaming interface.
+- Native Grassmann graph construction over prime-power finite fields, explicit
+  parameter selection, resumable family scopes, and generation-only graph6 export.
 - Per-graph SQLite checkpoints, resume, retryable limits, and preserved bounds.
 - CSV, graph6, PNG, and SVG exports, including lower bounds from isolated padding.
 - Independent small-graph verification and checkpoint/resume tests.
