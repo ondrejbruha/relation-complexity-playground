@@ -151,6 +151,49 @@ def _coverage(db, n, count, exhaustive):
         db.execute("INSERT OR REPLACE INTO coverage VALUES (?, ?, ?)", (n, count, int(exhaustive)))
 
 
+def _sample_family_orders(orders, growth, dense_until):
+    """Thin available orders before construction, retaining both endpoints."""
+    selected = []
+    for n in orders:
+        if not selected or n <= dense_until or n >= selected[-1] * growth:
+            selected.append(n)
+    if orders and selected[-1] != orders[-1]:
+        selected.append(orders[-1])
+    return selected
+
+
+def _family_orders(args):
+    """Plan each family independently; explicit parameter selections stay intact."""
+    planned = {}
+    for family in sorted(set(args.families)):
+        if family in ("path", "complete", "bipartite"):
+            orders = range(args.min_n, args.max_n + 1)
+        elif family == "cycle":
+            orders = range(max(3, args.min_n), args.max_n + 1)
+        elif family == "petersen":
+            orders = [10]
+        elif family == "rook":
+            orders = [side * side for side in range(2, math.isqrt(args.max_n) + 1)]
+        elif family == "cube":
+            orders = [1 << d for d in range(1, args.max_n.bit_length())]
+        elif family == "kneser":
+            orders = []
+            for k in itertools.count(2):
+                n = math.comb(2 * k + 1, k)
+                if n > args.max_n:
+                    break
+                orders.append(n)
+        elif family == "grassmann":
+            orders = sorted({grassmann_order(*spec) for spec in args.grassmann})
+        elif family == "johnson":
+            orders = sorted({johnson_order(*spec) for spec in args.johnson})
+        orders = [n for n in orders if args.min_n <= n <= args.max_n]
+        if family not in ("grassmann", "johnson"):
+            orders = _sample_family_orders(orders, args.family_growth, args.family_dense_until)
+        planned[family] = orders
+    return planned
+
+
 def tasks(args, db):
     def make(task_id, graph, label):
         return {"task_id": task_id, "graph6": graph_code(graph), "label": label}
@@ -211,8 +254,12 @@ def tasks(args, db):
                 order = johnson_order(*spec)
                 if args.min_n <= order <= args.max_n:
                     johnson_by_order.setdefault(order, []).append(spec)
-        for n in range(args.min_n, args.max_n + 1):
-            for family in sorted(set(args.families)):
+        families_by_order = {}
+        for family, orders in _family_orders(args).items():
+            for n in orders:
+                families_by_order.setdefault(n, []).append(family)
+        for n, families in sorted(families_by_order.items()):
+            for family in families:
                 label = family
                 if family == "johnson":
                     for m, k in johnson_by_order.get(n, []):
@@ -492,6 +539,12 @@ def parser():
     result.add_argument("--p", type=float, default=0.3)
     result.add_argument("--seed", type=int, default=42)
     result.add_argument("--families", nargs="+", choices=FAMILIES, default=list(DEFAULT_FAMILIES))
+    result.add_argument("--family-growth", type=float, default=1.0, metavar="FACTOR",
+                        help="families: minimum vertex-count ratio between sampled sizes above the dense range; "
+                             "1 = all sizes (default); retains first/last available sizes per family")
+    result.add_argument("--family-dense-until", type=int, default=100, metavar="N",
+                        help="families: keep all available sizes through N before growth sampling (default: 100); "
+                             "explicit Grassmann/Johnson selections are always retained")
     result.add_argument("--grassmann", nargs="+", type=grassmann_parameters, default=list(DEFAULT_PARAMETERS),
                         metavar="q,d,k", help="Grassmann parameter triples; default: 2,4,2")
     result.add_argument("--grassmann-max-vertices", type=int, default=DEFAULT_MAX_VERTICES,
@@ -532,6 +585,10 @@ def main(argv=None):
         arguments.error("workers, samples and plot-every must be positive")
     if args.min_n < 0 or args.max_n < args.min_n or not 0 <= args.p <= 1:
         arguments.error("Invalid vertex range or edge probability")
+    if not math.isfinite(args.family_growth) or args.family_growth < 1 or args.family_dense_until < 0:
+        arguments.error("--family-growth must be finite and >= 1; --family-dense-until must be non-negative")
+    if args.mode != "families" and (args.family_growth != 1 or args.family_dense_until != 100):
+        arguments.error("Family sampling requires --mode families")
     if args.timeout < 0 or args.max_automorphisms < 0 or args.max_search_nodes < 0 or args.heuristic_trials < 0:
         arguments.error("Limits must be non-negative")
     if args.bounds_only and args.heuristic_trials == 0:
@@ -608,6 +665,11 @@ def main(argv=None):
     except (ValueError, OSError, sqlite3.Error) as exc:
         arguments.error(str(exc))
     if args.mode == "families":
+        if args.family_growth > 1:
+            planned = _family_orders(args)
+            print(f"Family sampling: all sizes through n={args.family_dense_until}, "
+                  f"growth={args.family_growth:g}, first/last sizes retained; selected orders: "
+                  + ", ".join(f"{family}={len(orders)}" for family, orders in planned.items()), flush=True)
         stored_signature = json.loads(db.execute("SELECT value FROM metadata WHERE key='signature'").fetchone()[0])
         saved_families = stored_signature.get("families", [])
         saved_grassmann = {tuple(spec) for spec in stored_signature.get("grassmann", [])}

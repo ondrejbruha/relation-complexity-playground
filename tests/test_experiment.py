@@ -15,6 +15,73 @@ import experiment
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_family_sampling_preserves_sparse_families_and_range_endpoints(self):
+        args = experiment.parser().parse_args([
+            "--mode", "families", "--families", "cube", "rook", "kneser", "cycle",
+            "--max-n", "10000", "--family-growth", "1.5", "--family-dense-until", "100"])
+        orders = experiment._family_orders(args)
+        self.assertEqual(orders["cube"], [2 ** d for d in range(1, 14)])
+        self.assertEqual(orders["kneser"], [10, 35, 126, 462, 1716, 6435])
+        self.assertEqual(orders["cycle"][:98], list(range(3, 101)))
+        self.assertEqual(orders["rook"][:9], [s * s for s in range(2, 11)])
+        self.assertEqual({family: len(sizes) for family, sizes in orders.items()},
+                         {"cycle": 110, "cube": 13, "rook": 20, "kneser": 6})
+        self.assertEqual(orders["cycle"][-1], 10000)
+        self.assertEqual(orders["rook"][-1], 10000)
+        args.min_n, args.max_n = 101, 200
+        narrowed = experiment._family_orders(args)
+        self.assertEqual(narrowed["cube"], [128])
+        self.assertEqual(narrowed["kneser"], [126])
+        self.assertEqual(narrowed["rook"], [121, 196])
+        self.assertEqual(narrowed["cycle"], [101, 152, 200])
+        args.min_n = args.max_n = 0
+        self.assertTrue(all(not sizes for sizes in experiment._family_orders(args).values()))
+
+    def test_sampled_tasks_keep_explicit_parameters_and_default_generation(self):
+        options = ["--mode", "families", "--families", "cycle", "cube", "rook", "kneser", "petersen",
+                   "grassmann", "johnson", "--min-n", "3", "--max-n", "35",
+                   "--grassmann", "2,3,1", "2,3,2", "4,2,1", "--johnson", "6,1", "7,1"]
+        args = experiment.parser().parse_args(options + ["--family-growth", "10", "--family-dense-until", "0"])
+        selected = {task["task_id"] for task in experiment.tasks(args, None)}
+        self.assertEqual(selected, {
+            "family:cycle:3", "family:cycle:30", "family:cycle:35",
+            "family:cube:4", "family:cube:32", "family:rook:4", "family:rook:25",
+            "family:kneser:10", "family:kneser:35", "family:petersen:10",
+            "family:grassmann:v1:2:3:1", "family:grassmann:v1:2:3:2", "family:grassmann:v1:4:2:1",
+            "family:johnson:v1:6:1", "family:johnson:v1:7:1"})
+        default = experiment.parser().parse_args(options)
+        self.assertEqual(experiment._family_orders(default)["cycle"], list(range(3, 36)))
+        self.assertEqual(experiment._family_orders(default)["rook"], [4, 9, 16, 25])
+        self.assertEqual(experiment._family_orders(default)["cube"], [4, 8, 16, 32])
+
+    def test_sampling_can_be_changed_when_resuming_without_recomputation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            base = ["--mode", "families", "--families", "cycle", "--workers", "1", "--output", str(output)]
+            sampling = ["--family-growth", "2", "--family-dense-until", "6"]
+            with contextlib.redirect_stdout(io.StringIO()), patch.object(experiment, "export"):
+                self.assertEqual(experiment.main(base + sampling + ["--max-n", "16"]), 0)
+                with patch.object(experiment, "_worker", wraps=experiment._worker) as worker:
+                    self.assertEqual(experiment.main(base + sampling + ["--max-n", "20"]), 0)
+                    self.assertEqual([call.args[0]["task_id"] for call in worker.call_args_list], ["family:cycle:20"])
+                self.assertEqual(experiment.main(base + ["--max-n", "20"]), 0)
+                with patch.object(experiment, "_worker", side_effect=AssertionError("Exact graph recomputed")):
+                    self.assertEqual(experiment.main(base + sampling + ["--max-n", "20"]), 0)
+            with contextlib.closing(sqlite3.connect(output / "experiment.sqlite")) as db:
+                records, summary = experiment.summaries(db)
+                self.assertEqual([r["n"] for r in records], list(range(3, 21)))
+                self.assertTrue(all(not row["maximum_certified"] for row in summary))
+
+    def test_invalid_sampling_is_rejected_before_database_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            for options in (["--family-growth", "0.5"], ["--family-growth", "nan"],
+                            ["--family-growth", "inf"], ["--family-dense-until", "-1"],
+                            ["--mode", "random", "--family-growth", "2"]):
+                with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    experiment.main(["--mode", "families", "--output", str(output)] + options)
+            self.assertFalse((output / "experiment.sqlite").exists())
+
     def test_mixed_legacy_and_generator_rows_export_without_certifying_bounds(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)

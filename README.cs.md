@@ -124,6 +124,27 @@ rodin; samotná jedna rodina nemůže určit globální maximum.
 - `path`, `complete`, `bipartite`: další kontrolní rodiny; poslední znamená
   K(floor(N/2),ceil(N/2)).
 
+Pro velká N lze velikosti vybírat řidčeji, zvlášť v každé rodině:
+
+```powershell
+python main.py --mode families --max-n 10000 --families cube rook kneser cycle --family-dense-until 100 --family-growth 1.5 --workers 14 --output results/families-new --backend bliss --retry-incomplete --timeout 3600
+```
+
+Do N=100 se vyberou všechny dostupné velikosti. Potom se vezme další dostupná
+velikost alespoň 1,5× větší než předchozí vybraná velikost téže rodiny. První
+a poslední dostupná velikost v zadaném rozsahu se zahrnou vždy, takže poslední
+rozestup může být kratší. Tento příkaz vybere **149 grafů místo 10 116**:
+110 cyklů, 13 hyperkrychlí, 20 rook grafů a 6 Kneserových grafů.
+Výběr probíhá ještě před konstrukcí grafů.
+
+Výchozí `--family-growth 1` zachovává všechny velikosti; větší faktor znamená
+méně bodů. `--family-dense-until 0` vzorkuje v celém rozsahu. Výslovně zadané
+Grassmannovy a Johnsonovy grafy se zahrnou všechny. Nastavení lze měnit ve stejném
+výstupním adresáři: uložené výsledky zůstávají v exportech a přesné výsledky se
+znovu nepočítají. `--retry-incomplete` opakuje jen grafy v aktuálním výběru.
+Vzorkování snižuje počet grafů; výpočet rc a časový limit každého vybraného grafu
+zůstávají stejné.
+
 `circulant` prochází spojovací množiny v přirozeném binárním pořadí, nejvýše
 `--samples` na N. Pomocí komplementace vynechá druhou polovinu množin; některé
 izomorfní grafy zůstávají. Jde o systematické hledání kandidátů, nikoli náhodný

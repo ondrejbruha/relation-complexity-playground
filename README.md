@@ -89,6 +89,25 @@ graphs, Petersen, hypercubes, square rook graphs `L(K(s,s))`, and odd Kneser gra
 Their order is the number of graph vertices: a hypercube has `2^d`
 vertices, a square rook graph `s²`, and an odd Kneser graph `binom(2k+1,k)`.
 
+For larger ranges, sample vertex counts independently within each family:
+
+```sh
+python main.py --mode families --max-n 10000 --families cube rook kneser cycle --family-dense-until 100 --family-growth 1.5 --workers 14 --output results/families-new --backend bliss --retry-incomplete --timeout 3600
+```
+
+This keeps every available size through n=100. Above that, the next selected size
+is at least 1.5 times the previous selected size in that family. The first and last
+available sizes within the requested range are always included, so the last interval
+may be shorter. This selects 149 graphs (110 cycles, 13 cubes, 20 rook graphs, and
+6 Kneser graphs), instead of 10,116. Selection happens before graph construction.
+`--family-growth 1` is the default and keeps all sizes. Larger factors give fewer
+points; `--family-dense-until 0` applies sampling throughout the range.
+Explicit Grassmann and Johnson parameter selections are always retained.
+Sampling settings can change in the same output directory: saved results remain
+in exports, and exact results are skipped. `--retry-incomplete` retries only graphs
+in the current selection. Sampling reduces the number of graphs, while the rc
+calculation and timeout for each selected graph stay the same.
+
 Grassmann parameters specify field size, ambient dimension, and subspace dimension;
 `--max-n` still bounds the number of graph vertices:
 
