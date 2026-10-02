@@ -106,11 +106,19 @@ The construction limit also applies to the Python API's `max_vertices` argument.
 It does not impose a memory or time bound. The rc timeout starts after construction
 and remains cooperative, as documented in the [algorithm note](algorithm.md).
 
-Generating these graphs does **not** introduce a specialized complexity backend.
-The current solver still enumerates all automorphisms and searches obstructions.
-In a local 30-second run, even J_2(4,2) timed out during automorphism enumeration;
-only the general bounds 1 <= rc <= 34 were saved. When a limit is reached, rc
-stays empty and only proven bounds are exported; those bounds cannot be treated
-as an exact family-growth curve. More workers help across graphs, while an
-individual difficult graph needs a better group-action backend. No theoretical
-rc formula or asymptotic growth claim is substituted for a computation here.
+For complexity calculations, install `requirements-group.txt` and select the
+generator backend:
+
+```sh
+python -m pip install -r requirements-group.txt
+python main.py --mode families --families grassmann --grassmann 2,4,2 2,5,2 2,6,2 --max-n 651 --backend bliss --workers 2 --timeout 30 --output results/grassmann-bliss
+```
+
+Bliss computes full automorphism generators and coloured point stabilizers, avoiding
+group enumeration. In local verification J_2(4,2) completed with rc=5; its minimal
+obstruction was independently verified by VF2. Larger examples can still time out
+during subset search, retaining improved lower and upper bounds. `--bounds-only`
+searches verified witnesses, while `--retry-incomplete` resumes a previously bounded
+experiment by retrying those graphs. The cache engine signature remains compatible
+with earlier exact values and bounds. No theoretical rc formula or asymptotic claim
+is substituted for a computation.

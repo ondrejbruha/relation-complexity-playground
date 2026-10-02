@@ -97,9 +97,28 @@ python main.py --mode families --families grassmann --grassmann 2,4,2 --max-n 35
 python main.py --mode families --families grassmann --grassmann 2,4,2 2,5,2 2,6,2 --max-n 651 --generate-only --output results/grassmann-graphs
 ```
 
-The second command writes graphs without computing rc. Generation is fast, while
-the generic rc solver may reach limits even at 35 vertices. Prime-power fields
-are supported without additional dependencies. [Grassmann guide](docs/grassmann.md).
+The second command writes graphs without computing rc. Prime-power fields are
+supported without additional construction dependencies. Install the optional
+generator backend for complexity calculations on larger symmetric graphs:
+
+```sh
+python -m pip install -r requirements-group.txt
+python main.py --mode families --families grassmann --grassmann 2,4,2 2,5,2 2,6,2 --max-n 651 --backend bliss --workers 2 --timeout 30 --output results/grassmann-bliss
+```
+
+`auto` uses enumeration through n=9 and Bliss for larger graphs when installed.
+Bliss stores generators and computes full point stabilizers instead of enumerating
+the group. Difficult subset searches can still time out. [Grassmann guide](docs/grassmann.md).
+
+Johnson graphs are also available through explicit parameter pairs; the vertex
+count is `binom(m,k)`, not m:
+
+```sh
+python main.py --mode families --families johnson --johnson 7,3 8,4 9,4 --max-n 126 --backend bliss --output results/johnson
+```
+
+`--johnson-max-vertices` limits construction to 2,000 vertices by default.
+Johnson and Grassmann selections can be extended in the same output directory.
 
 Other examples:
 
@@ -120,8 +139,8 @@ Complement symmetry skips half of the sets, but isomorphic duplicates can remain
 These are candidate searches, not uniform samples of all graphs. Random graphs
 often have trivial automorphism groups and rc = 1, so they are weak candidates
 for finding high extremal complexity. Johnson/Kneser, Grassmann, and strongly
-regular graphs are more relevant larger families, though the generic backend may
-be impractical for their large automorphism groups.
+regular graphs are more relevant larger families. Use the generator backend to
+avoid the cost of enumerating their large automorphism groups.
 
 `--connected` restricts atlas/catalog/geng/graph6 experiments to connected graphs;
 those runs are not marked as certified maxima over all graphs.
@@ -137,16 +156,18 @@ comparison or a different dataset mode, random seed, probability, or input file.
 | File | Contents |
 |---|---|
 | `experiment.sqlite` | Durable per-graph checkpoints, metadata, and coverage |
-| `values.csv` | Graph6, exact values or bounds, status, time, and obstruction witnesses |
+| `values.csv` | Graph6, values or bounds, witnesses, backend, group/search times, generator and oracle counts |
 | `summary.csv` | Counts, observed maxima, bounds, and `maximum_certified` |
 | `distribution.csv` | Counts of exact values at each graph order |
-| `plot.png`, `plot.svg` | Linear and logarithmic views |
+| `plot.png`, `plot.svg` | Exact values in linear/logarithmic views; a separate unfinished-bounds panel when needed |
 | `extremal_candidates.g6` | One candidate per summary row, including isolated-vertex padding |
 
 `observed_lower_bound` uses the graphs directly examined at that order.
 `padded_lower_bound` also carries forward smaller examples by adding isolated
-vertices. Filled plot markers denote certified exact maxima; open markers are
-lower bounds. The `log2(n)` curve is a visual reference, not a proved bound or fit.
+vertices. The padded lower bound is a faint dashed step curve, not a measured
+family curve. Both main panels show exact graph values; certified global maxima
+have separate markers. Unfinished graphs appear as lower/upper intervals in their
+own panel. The `log2(n)` curve is a visual reference, not a proved bound or fit.
 Means and distributions include only completed exact computations, which may
 bias them if searches reached limits. [Details of the conventions](docs/algorithm.md).
 
@@ -163,22 +184,34 @@ an unfinished graph starts over on the next run. Run one writer per output direc
 
 ## Limits and correctness
 
-Defaults are 30 seconds and 100,000 automorphisms per graph. Limits are cooperative:
-an internal NetworkX search can run longer before the next check. Limited results
-have an empty `rc`, an explicit status, and proven lower/upper bounds. Retry them:
+The default timeout is 30 seconds per graph. The enumeration backend additionally
+limits stored automorphisms to 100,000; this limit does not restrict a Bliss group's
+order. Limits are cooperative: an internal isomorphism call can run longer before
+the next check. Limited results have an empty `rc`, an explicit status, and proven
+lower/upper bounds unless those bounds coincide. Retry them:
 
 ```sh
 python main.py --mode catalog --max-n 9 --timeout 120 --max-automorphisms 500000 --retry-incomplete --workers 4 --plot-every 25000 --output results/catalog
 ```
 
-`0` disables either limit. Each worker stores its own automorphisms and bitsets.
-The search remains exponential in the worst case. There is no GPU backend;
-current acceleration comes from obstruction normalization, integer bitsets,
-symmetry reduction, and parallel computation across graphs.
+`0` disables either limit. `--max-search-nodes` adds a deterministic exhaustive
+search limit. For larger graphs, use verified witness search without exhaustive
+certification:
+
+```sh
+python main.py --mode families --families grassmann --grassmann 2,5,2 --max-n 155 --backend bliss --bounds-only --heuristic-trials 32 --search-seed 0 --output results/grassmann-bounds
+```
+
+Witness restarts improve lower bounds; they never certify exactness by sampling.
+Equal proved bounds can certify a value even in bounds-only mode. `verify_witness`
+checks normalized certificates with an independent VF2 isomorphism algorithm.
+The subset search remains exponential. Each process has its own bounded stabilizer
+cache or enumeration bitsets. There is no GPU backend.
 
 The exactness claim depends on the algorithm and complete source coverage. Tests
 compare all graphs through n = 6 against an independent exhaustive partial-map
-implementation and cover known examples, witnesses, complements, relabelling,
+implementation, compare both backends on all atlas graphs through n=7, and cover
+known examples, witnesses, complements, relabelling,
 limits, and checkpoint/resume behavior. GitHub Actions is configured to run tests
 and a parallel plotting smoke test on Windows and Linux with Python 3.12 and 3.13.
 
@@ -204,8 +237,9 @@ not certified global maxima for those larger orders.
 ## Project layout
 
 `main.py` is the CLI entry point, `experiment.py` manages experiments and exports,
-`relational_complexity.py` contains the computation API, and `grassmann.py`
-constructs Grassmann graphs over finite fields.
+`relational_complexity.py` contains the computation API, `group_backend.py` provides
+Bliss stabilizers, and `grassmann.py` and `johnson.py` construct geometric and subset
+families. The optional backend dependencies are in `requirements-group.txt`.
 `gpt_rc_brute_force.py` is a historical k-closure draft; it does not compute this
 project's structural relational complexity. See [the algorithm note](docs/algorithm.md).
 

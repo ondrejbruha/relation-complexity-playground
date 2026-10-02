@@ -15,6 +15,63 @@ import experiment
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_mixed_legacy_and_generator_rows_export_without_certifying_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            with contextlib.closing(experiment.open_database(output / "test.sqlite", {"engine": "test"})) as db:
+                task = {"task_id": "family:petersen:10", "graph6": experiment.graph_code(nx.petersen_graph()),
+                        "label": "petersen"}
+                legacy = experiment._worker(task, None, None, "enumeration")
+                for key in ("backend", "generators", "stabilizer_calls", "cache_hits", "heuristic_nodes",
+                            "group_seconds", "search_seconds"):
+                    legacy.pop(key)
+                experiment.save_result(db, legacy)
+                cube = nx.convert_node_labels_to_integers(nx.hypercube_graph(4))
+                task = {"task_id": "family:cube:16", "graph6": experiment.graph_code(cube), "label": "cube"}
+                experiment.save_result(db, experiment._worker(task, None, None, "enumeration", 8, 0, None, True))
+                experiment.export(db, output, "families")
+                _, summary = experiment.summaries(db)
+                self.assertTrue(all(not row["maximum_certified"] for row in summary))
+            with (output / "values.csv").open(encoding="utf-8", newline="") as stream:
+                records = list(csv.DictReader(stream))
+            self.assertEqual(records[0]["backend"], "")
+            self.assertEqual(records[1]["backend"], "enumeration")
+            self.assertEqual(records[1]["rc"], "")
+            self.assertTrue((output / "plot.png").exists())
+            self.assertTrue((output / "plot.svg").exists())
+
+    def test_johnson_selection_resumes_with_dual_cached_graphs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            base = ["--mode", "families", "--families", "johnson", "--max-n", "7",
+                    "--workers", "1", "--output", str(output)]
+            with contextlib.redirect_stdout(io.StringIO()), patch.object(experiment, "export"):
+                self.assertEqual(experiment.main(base + ["--johnson", "6,1"]), 0)
+                with patch.object(experiment, "_worker", side_effect=AssertionError("Cached graph recomputed")):
+                    self.assertEqual(experiment.main(base + ["--johnson", "6,5"]), 0)
+                self.assertEqual(experiment.main(base + ["--johnson", "7,1"]), 0)
+            with contextlib.closing(sqlite3.connect(output / "experiment.sqlite")) as db:
+                signature = json.loads(db.execute("SELECT value FROM metadata WHERE key='signature'").fetchone()[0])
+                self.assertEqual(signature["johnson"], [[6, 1], [6, 5], [7, 1]])
+                records, _ = experiment.summaries(db)
+                self.assertEqual(len(records), 3)
+                self.assertTrue(all(r["rc"] == 0 for r in records))
+
+    def test_johnson_generation_and_validation_precede_database_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            base = ["--mode", "families", "--families", "johnson", "--output", str(output)]
+            for options in ([], ["--johnson", "8,0"], ["--max-n", "70", "--johnson-max-vertices", "69"],
+                            ["--bounds-only", "--heuristic-trials", "0"]):
+                with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    experiment.main(base + options)
+            self.assertFalse((output / "experiment.sqlite").exists())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(experiment.main(base + ["--johnson", "7,3", "8,4", "--max-n", "70",
+                                                         "--generate-only"]), 0)
+            self.assertEqual([len(g) for g in nx.read_graph6(output / "graphs.g6")], [35, 70])
+            self.assertFalse((output / "experiment.sqlite").exists())
+
     def test_generate_grassmann_graphs_without_complexity_search(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
@@ -98,7 +155,7 @@ class ExperimentTests(unittest.TestCase):
             with contextlib.closing(experiment.open_database(Path(temporary) / "test.sqlite", {"engine": "test"})) as db:
                 graph = nx.petersen_graph()
                 task = {"task_id": "test", "graph6": experiment.graph_code(graph), "label": "test"}
-                record = experiment._worker(task, None, 1)
+                record = experiment._worker(task, None, 1, "enumeration")
                 experiment._coverage(db, 10, 2, True)
                 experiment.save_result(db, record)
                 _, summary = experiment.summaries(db)
@@ -113,7 +170,7 @@ class ExperimentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with contextlib.closing(experiment.open_database(Path(temporary) / "test.sqlite", {"engine": "test"})) as db:
                 task = {"task_id": "test", "graph6": experiment.graph_code(nx.petersen_graph()), "label": "test"}
-                limited = experiment._worker(task, None, 1)
+                limited = experiment._worker(task, None, 1, "enumeration")
                 experiment.save_result(db, {**limited, "lower_bound": 2})
                 experiment.save_result(db, limited)
                 saved = json.loads(db.execute("SELECT payload FROM results").fetchone()[0])

@@ -13,6 +13,10 @@ python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 
+For generator-backend development, install `requirements-group.txt` instead.
+Without igraph, generator-specific tests are skipped; CI installs it and tests
+both backends, including a parallel symmetric-family experiment.
+
 Tests use the standard library's `unittest`; no separate test package is required.
 Check the parallel runner and real plotting/export path with a small offline run:
 
@@ -49,9 +53,9 @@ Do not attach a full database when a small graph and command reproduce the issue
 
 ## Useful next steps
 
-Generator-based automorphism backends (nauty/Traces or bliss), stabilizer-chain
-operations, independent witness verification, and targeted searches among strongly
-regular or geometric graphs are particularly useful. Profile a bottleneck before
+The Bliss generator backend and independent VF2 witness checks are implemented.
+Further stabilizer-chain implementations, specialized geometric actions, and
+targeted strongly regular graph searches are useful next steps. Profile a bottleneck before
 adding GPU machinery. Packaging for PyPI is a later step rather than a requirement
 for working on this repository.
 

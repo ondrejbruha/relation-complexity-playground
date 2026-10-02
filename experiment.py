@@ -21,10 +21,13 @@ import networkx as nx
 
 from grassmann import (DEFAULT_MAX_VERTICES, DEFAULT_PARAMETERS, grassmann_graph,
                        grassmann_order, parse_parameters)
-from relational_complexity import ENGINE_VERSION, compute_relational_complexity
+from johnson import (DEFAULT_MAX_VERTICES as JOHNSON_MAX_VERTICES,
+                     DEFAULT_PARAMETERS as JOHNSON_PARAMETERS, johnson_graph,
+                     johnson_order, parse_parameters as johnson_parameters)
+from relational_complexity import BACKENDS, ENGINE_VERSION, compute_relational_complexity
 
 DEFAULT_FAMILIES = ("path", "cycle", "complete", "bipartite", "petersen", "rook", "cube", "kneser")
-FAMILIES = (*DEFAULT_FAMILIES, "grassmann")
+FAMILIES = (*DEFAULT_FAMILIES, "grassmann", "johnson")
 CATALOG_COUNTS = {8: 12_346, 9: 274_668}
 CATALOG_URL = "https://users.cecs.anu.edu.au/~bdm/data/graph{n}.g6"
 
@@ -33,10 +36,14 @@ def graph_code(graph: nx.Graph) -> str:
     return nx.to_graph6_bytes(graph, header=False).strip().decode("ascii")
 
 
-def _worker(task: dict, timeout: float | None, max_aut: int | None) -> dict:
+def _worker(task: dict, timeout: float | None, max_aut: int | None, backend: str = "auto",
+            heuristic_trials: int = 8, search_seed: int = 0,
+            max_search_nodes: int | None = None, bounds_only: bool = False) -> dict:
     graph = nx.from_graph6_bytes(task["graph6"].encode("ascii"))
     return {**task, **compute_relational_complexity(
-        graph, timeout=timeout, max_automorphisms=max_aut).to_dict()}
+        graph, timeout=timeout, max_automorphisms=max_aut, backend=backend,
+        heuristic_trials=heuristic_trials, search_seed=search_seed,
+        max_search_nodes=max_search_nodes, bounds_only=bounds_only).to_dict()}
 
 
 def _worker_init() -> None:
@@ -51,6 +58,8 @@ def _signature(args) -> dict:
         signature["families"] = sorted(set(args.families))
         if "grassmann" in args.families:
             signature["grassmann"] = [list(spec) for spec in sorted(set(args.grassmann))]
+        if "johnson" in args.families:
+            signature["johnson"] = [list(spec) for spec in sorted(set(args.johnson))]
     elif args.mode == "graph6":
         digest = hashlib.sha256()
         with args.input.open("rb") as stream:
@@ -99,6 +108,12 @@ def open_database(path: Path, signature: dict) -> sqlite3.Connection:
                 specifications.update(tuple(spec) for spec in requested.get("grassmann", []))
                 if specifications:
                     requested["grassmann"] = [list(spec) for spec in sorted(specifications)]
+                old_identity.pop("johnson", None)
+                new_identity.pop("johnson", None)
+                johnson_specs = {tuple(spec) for spec in previous.get("johnson", [])}
+                johnson_specs.update(tuple(spec) for spec in requested.get("johnson", []))
+                if johnson_specs:
+                    requested["johnson"] = [list(spec) for spec in sorted(johnson_specs)]
             if old_identity != new_identity:
                 differences = [f"{key}: stored={old_identity.get(key)!r}, requested={new_identity.get(key)!r}"
                                for key in sorted(old_identity.keys() | new_identity.keys())
@@ -185,15 +200,26 @@ def tasks(args, db):
                 yield make(f"random:{n}:{sample}", nx.gnp_random_graph(n, args.p, seed=seed), f"sample {sample}")
     elif args.mode == "families":
         grassmann_by_order = {}
+        johnson_by_order = {}
         if "grassmann" in args.families:
             for spec in sorted(set(args.grassmann)):
                 order = grassmann_order(*spec)
                 if args.min_n <= order <= args.max_n:
                     grassmann_by_order.setdefault(order, []).append(spec)
+        if "johnson" in args.families:
+            for spec in sorted(set(args.johnson)):
+                order = johnson_order(*spec)
+                if args.min_n <= order <= args.max_n:
+                    johnson_by_order.setdefault(order, []).append(spec)
         for n in range(args.min_n, args.max_n + 1):
             for family in sorted(set(args.families)):
                 label = family
-                if family == "grassmann":
+                if family == "johnson":
+                    for m, k in johnson_by_order.get(n, []):
+                        graph = johnson_graph(m, k, max_vertices=args.johnson_max_vertices)
+                        yield make(f"family:johnson:v1:{m}:{k}", graph, f"J({m},{k})")
+                    continue
+                elif family == "grassmann":
                     for q, d, k in grassmann_by_order.get(n, []):
                         graph = grassmann_graph(q, d, k, max_vertices=args.grassmann_max_vertices)
                         yield make(f"family:grassmann:v1:{q}:{d}:{k}", graph, f"J_{q}({d},{k})")
@@ -318,7 +344,9 @@ def _csv(path, records):
         return
     temporary = path.with_suffix(path.suffix + ".tmp")
     with temporary.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(records[0]))
+        # A resumed database may mix legacy rows with new backend diagnostics.
+        fields = list(dict.fromkeys(key for record in records for key in record))
+        writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for record in records:
             writer.writerow({key: json.dumps(value, sort_keys=True) if isinstance(value, (dict, list))
@@ -341,24 +369,32 @@ def export(db, directory, mode):
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
 
+    def logarithmic_orders(ax, orders):
+        orders = sorted(set(orders))
+        ax.set_xscale("log", base=2)
+        separated = all(math.log2(b / a) >= 0.18 for a, b in zip(orders, orders[1:]))
+        ticks = orders if len(orders) <= 8 and separated else [
+            2 ** k for k in range(max(orders).bit_length()) if min(orders) <= 2 ** k <= max(orders)]
+        ax.set_xticks(ticks or [min(orders)])
+        from matplotlib.ticker import ScalarFormatter
+        ax.xaxis.set_major_formatter(ScalarFormatter())
+
     with plt.rc_context({"font.size": 11, "axes.spines.top": False,
                          "axes.spines.right": False, "svg.fonttype": "none"}):
-        fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), layout="constrained")
+        incomplete = [r for r in records if r["rc"] is None]
+        columns = 3 if incomplete else 2
+        fig, all_axes = plt.subplots(1, columns, figsize=(6.5 * columns, 5.5), layout="constrained")
+        axes = all_axes[:2]
         exact = [r for r in records if r["rc"] is not None]
         ns = [s["n"] for s in summary]
         for ax in axes:
-            ax.plot(ns, [s["padded_lower_bound"] for s in summary], color="#b45309", linewidth=2,
-                    label="Proven lower bound for f(n), including isolated padding")
-            if any(s["observed_lower_bound"] < s["padded_lower_bound"] for s in summary):
-                ax.plot(ns, [s["observed_lower_bound"] for s in summary], color="#b45309", linestyle=":",
-                        alpha=0.5, label="Observed maximum at each n")
-            for certified, marker, face, label in [
-                (True, "o", "#b45309", "Certified exact f(n)"),
-                (False, "^", "white", "Global maximum not certified")]:
-                selected = [s for s in summary if s["maximum_certified"] == certified]
-                if selected:
-                    ax.scatter([s["n"] for s in selected], [s["padded_lower_bound"] for s in selected],
-                               s=50, marker=marker, facecolors=face, edgecolors="#b45309", zorder=5, label=label)
+            ax.step(ns, [s["padded_lower_bound"] for s in summary], where="post", color="#b45309",
+                    linewidth=1.2, linestyle="--", alpha=0.55,
+                    label="Lower bound for f(n), with isolated padding")
+            selected = [s for s in summary if s["maximum_certified"]]
+            if selected:
+                ax.scatter([s["n"] for s in selected], [s["padded_lower_bound"] for s in selected],
+                           s=50, color="#b45309", zorder=5, label="Certified exact f(n)")
             ax.set(ylabel="Structural relational complexity", ylim=(-0.15, None))
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             ax.grid(alpha=0.18)
@@ -368,31 +404,63 @@ def export(db, directory, mode):
             frequencies[pair] = frequencies.get(pair, 0) + 1
         distribution = [{"n": n, "rc": rc, "count": count} for (n, rc), count in sorted(frequencies.items())]
         _csv(directory / "distribution.csv", distribution)
-        axes[0].scatter([r["n"] for r in distribution], [r["rc"] for r in distribution],
-                        s=[12 + 9 * math.log2(r["count"]) for r in distribution],
-                        alpha=0.28, color="#64748b", label="Exact values (area scales with log count)")
+        if mode != "families":
+            for ax in axes:
+                ax.scatter([r["n"] for r in distribution], [r["rc"] for r in distribution],
+                           s=[12 + 9 * math.log2(r["count"]) for r in distribution],
+                           alpha=0.35, color="#64748b", label="Exact graph values (area scales with log count)")
         axes[0].set(xlabel="Number of vertices n", title=f"Measured values - {mode}")
         axes[0].xaxis.set_major_locator(MaxNLocator(integer=True))
-        axes[1].set(xlabel="Number of vertices n (log2 scale)", title="View for comparing growth")
+        axes[1].set(xlabel="Number of vertices n (log2 scale)", title="Exact values and growth reference")
         # There is no log(0). Do not claim any reference curve is a proven bound.
         if all(n > 0 for n in ns):
-            axes[1].set_xscale("log", base=2)
-            axes[1].set_xticks(ns if len(ns) <= 15 else [2 ** k for k in range(max(ns).bit_length())])
-            from matplotlib.ticker import ScalarFormatter
-            axes[1].xaxis.set_major_formatter(ScalarFormatter())
+            logarithmic_orders(axes[1], ns)
             axes[1].plot(ns, [math.log2(n) for n in ns], linestyle="--", color="#0369a1",
                          alpha=0.7, label="log2(n), reference curve only")
         else:
             axes[1].set_xlabel("Number of vertices n (linear; dataset includes n=0)")
         if mode == "families":
-            for label in sorted({r["label"] for r in exact}):
-                group = sorted((r for r in exact if r["label"] == label), key=lambda r: r["n"])
-                axes[0].plot([r["n"] for r in group], [r["rc"] for r in group],
-                             marker="o", markersize=4, linestyle="none", alpha=0.7, label=label)
+            def family_label(record):
+                parts = record["task_id"].split(":")
+                if len(parts) >= 2 and parts[0] == "family":
+                    if parts[1] == "grassmann" and len(parts) == 6:
+                        return f"Grassmann q={parts[3]}, k={parts[5]}"
+                    return parts[1]
+                return record["label"]
+            groups = {}
+            for record in exact:
+                groups.setdefault(family_label(record), []).append(record)
+            for color_index, (label, group) in enumerate(sorted(groups.items())):
+                color = f"C{color_index % 10}"
+                for ax in axes:
+                    ax.scatter([r["n"] for r in group], [r["rc"] for r in group],
+                               s=22, alpha=0.75, color=color, label=label, zorder=4)
+        if incomplete:
+            bounds_ax = all_axes[2]
+            bounds_ax.vlines([r["n"] for r in incomplete],
+                             [r["lower_bound"] for r in incomplete],
+                             [r["upper_bound"] for r in incomplete], color="#64748b", alpha=0.3)
+            bounds_ax.scatter([r["n"] for r in incomplete], [r["lower_bound"] for r in incomplete],
+                              marker="^", facecolors="white", edgecolors="#b45309", s=24,
+                              label="Verified lower bound")
+            bounds_ax.scatter([r["n"] for r in incomplete], [r["upper_bound"] for r in incomplete],
+                              marker="_", color="#64748b", s=24, label="Proven upper bound")
+            if all(r["n"] > 0 for r in incomplete):
+                logarithmic_orders(bounds_ax, [r["n"] for r in incomplete])
+            bounds_ax.set_yscale("symlog", linthresh=2)
+            bounds_ax.set(xlabel="Number of vertices n", ylabel="rc interval (symlog scale)",
+                          title=f"Unfinished calculations: {len(incomplete)}")
+            bounds_ax.grid(alpha=0.18)
+            bounds_ax.legend(fontsize=7)
+            statuses = {}
+            for record in incomplete:
+                statuses[record["status"]] = statuses.get(record["status"], 0) + 1
+            bounds_ax.text(0.02, 0.02, ", ".join(f"{key}: {count}" for key, count in sorted(statuses.items())),
+                           transform=bounds_ax.transAxes, fontsize=7)
         for ax in axes:
-            top = max([max(line.get_ydata()) for line in ax.lines] + [0])
+            top = max([max(line.get_ydata()) for line in ax.lines] + [r["rc"] for r in exact] + [0])
             ax.set_ylim(-0.15, max(0.75, top + 0.3))
-            if mode == "families" and ax is axes[0]:
+            if mode == "families":
                 ax.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=3)
             else:
                 ax.legend(fontsize=7, loc="upper left")
@@ -410,6 +478,12 @@ def parser():
         except ValueError as exc:
             raise argparse.ArgumentTypeError(str(exc)) from exc
 
+    def johnson_specification(value):
+        try:
+            return johnson_parameters(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--mode", choices=("atlas", "catalog", "random", "families", "circulant", "graph6", "geng"), default="atlas")
     result.add_argument("--min-n", type=int, default=1)
@@ -422,6 +496,10 @@ def parser():
                         metavar="q,d,k", help="Grassmann parameter triples; default: 2,4,2")
     result.add_argument("--grassmann-max-vertices", type=int, default=DEFAULT_MAX_VERTICES,
                         help="Maximum vertices per constructed Grassmann graph; default: 2000")
+    result.add_argument("--johnson", nargs="+", type=johnson_specification, default=list(JOHNSON_PARAMETERS),
+                        metavar="m,k", help="Johnson parameter pairs; default: 8,4")
+    result.add_argument("--johnson-max-vertices", type=int, default=JOHNSON_MAX_VERTICES,
+                        help="Maximum vertices per constructed Johnson graph; default: 2000")
     result.add_argument("--generate-only", action="store_true",
                         help="Write selected families to graphs.g6 and graphs.csv without computing rc")
     result.add_argument("--input", type=Path, help="graph6 file")
@@ -429,7 +507,17 @@ def parser():
     result.add_argument("--connected", action="store_true", help="Connected atlas/geng/graph6 graphs only")
     result.add_argument("--workers", type=int, default=max(1, min(4, (os.cpu_count() or 2) - 1)))
     result.add_argument("--timeout", type=float, default=30, help="Cooperative seconds per graph; 0 = unlimited")
-    result.add_argument("--max-automorphisms", type=int, default=100_000, help="0 = unlimited")
+    result.add_argument("--max-automorphisms", type=int, default=100_000,
+                        help="Enumeration backend only; 0 = unlimited")
+    result.add_argument("--backend", choices=BACKENDS, default="auto",
+                        help="auto: enumeration through n=9, Bliss for larger graphs if installed")
+    result.add_argument("--heuristic-trials", type=int, default=8,
+                        help="Bliss / bounds-only: verified restarts per pair orbit; 0 disables heuristics")
+    result.add_argument("--search-seed", type=int, default=0, help="Seed for reproducible witness restarts")
+    result.add_argument("--max-search-nodes", type=int, default=0,
+                        help="Exhaustive search-node limit per graph; 0 = unlimited")
+    result.add_argument("--bounds-only", action="store_true",
+                        help="Search verified witnesses without exhaustive certification")
     result.add_argument("--output", type=Path, default=Path("results/atlas"))
     result.add_argument("--retry-incomplete", action="store_true", help="Retry bounded results with current limits")
     result.add_argument("--plot-only", action="store_true", help="Export existing DB without computing")
@@ -444,8 +532,14 @@ def main(argv=None):
         arguments.error("workers, samples and plot-every must be positive")
     if args.min_n < 0 or args.max_n < args.min_n or not 0 <= args.p <= 1:
         arguments.error("Invalid vertex range or edge probability")
-    if args.timeout < 0 or args.max_automorphisms < 0:
+    if args.timeout < 0 or args.max_automorphisms < 0 or args.max_search_nodes < 0 or args.heuristic_trials < 0:
         arguments.error("Limits must be non-negative")
+    if args.bounds_only and args.heuristic_trials == 0:
+        arguments.error("--bounds-only requires --heuristic-trials >= 1")
+    if not args.plot_only and not args.generate_only and args.backend == "bliss":
+        import importlib.util
+        if importlib.util.find_spec("igraph") is None:
+            arguments.error("--backend bliss requires igraph; install requirements-group.txt")
     if not args.plot_only and args.mode == "atlas" and args.max_n > 7:
         arguments.error("Complete atlas ends at n=7; use --mode catalog (up to 9) or geng")
     if args.mode == "catalog" and args.max_n > 9:
@@ -458,8 +552,16 @@ def main(argv=None):
         arguments.error("--connected requires atlas, catalog, geng or graph6")
     if args.generate_only and (args.mode != "families" or args.plot_only):
         arguments.error("--generate-only requires --mode families and cannot be combined with --plot-only")
-    if args.grassmann_max_vertices < 1:
-        arguments.error("--grassmann-max-vertices must be positive")
+    if args.grassmann_max_vertices < 1 or args.johnson_max_vertices < 1:
+        arguments.error("Family construction limits must be positive")
+    if not args.plot_only and args.mode == "families" and "johnson" in args.families:
+        selected = [(spec, johnson_order(*spec)) for spec in sorted(set(args.johnson))]
+        for spec, order in selected:
+            if args.min_n <= order <= args.max_n and order > args.johnson_max_vertices:
+                arguments.error(f"J({spec[0]},{spec[1]}) has {order} vertices, exceeding --johnson-max-vertices")
+        if set(args.families) == {"johnson"} and not any(args.min_n <= order <= args.max_n for _, order in selected):
+            arguments.error("No selected Johnson graph fits --min-n/--max-n; selected vertex counts: "
+                            + ", ".join(str(order) for _, order in selected))
     if not args.plot_only and args.mode == "families" and "grassmann" in args.families:
         selected = [(spec, grassmann_order(*spec)) for spec in sorted(set(args.grassmann))]
         for spec, order in selected:
@@ -509,8 +611,10 @@ def main(argv=None):
         stored_signature = json.loads(db.execute("SELECT value FROM metadata WHERE key='signature'").fetchone()[0])
         saved_families = stored_signature.get("families", [])
         saved_grassmann = {tuple(spec) for spec in stored_signature.get("grassmann", [])}
+        saved_johnson = {tuple(spec) for spec in stored_signature.get("johnson", [])}
         if set(saved_families) != set(args.families) or (
-                "grassmann" in args.families and saved_grassmann != set(args.grassmann)):
+                "grassmann" in args.families and saved_grassmann != set(args.grassmann)) or (
+                "johnson" in args.families and saved_johnson != set(args.johnson)):
             print("Previous family results are retained; exports include all saved families. "
                   "Current task selection: " + ", ".join(sorted(set(args.families))), flush=True)
     stopped = False
@@ -550,7 +654,10 @@ def main(argv=None):
             else:
                 yield task
 
-    print(f"Mode={args.mode}, n={args.min_n}..{args.max_n}, workers={args.workers}; checkpoint={database_path.resolve()}", flush=True)
+    worker_options = (args.timeout or None, args.max_automorphisms or None, args.backend,
+                      args.heuristic_trials, args.search_seed, args.max_search_nodes or None, args.bounds_only)
+    print(f"Mode={args.mode}, n={args.min_n}..{args.max_n}, workers={args.workers}, "
+          f"backend={args.backend}; checkpoint={database_path.resolve()}", flush=True)
     iterator = pending_tasks()
     pool = None
     failed = False
@@ -559,7 +666,7 @@ def main(argv=None):
             for task in iterator:
                 if stopped:
                     break
-                accept(_worker(task, args.timeout or None, args.max_automorphisms or None))
+                accept(_worker(task, *worker_options))
         else:
             pool = ProcessPoolExecutor(max_workers=args.workers, initializer=_worker_init)
             pending = {}
@@ -571,7 +678,7 @@ def main(argv=None):
                     except StopIteration:
                         exhausted = True
                         break
-                    pending[pool.submit(_worker, task, args.timeout or None, args.max_automorphisms or None)] = task
+                    pending[pool.submit(_worker, task, *worker_options)] = task
                 if stopped:
                     exhausted = True
                 if pending:

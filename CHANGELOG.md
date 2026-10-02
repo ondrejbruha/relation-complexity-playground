@@ -6,6 +6,11 @@ Initial public-release preparation:
 
 - Structural relational complexity via minimal nonextendable partial isomorphisms.
 - Bitset intersections, pair-orbit reduction, and per-graph CPU parallelism.
+- Optional Bliss generator backend, full point stabilizers, cached orbit queries,
+  subset symmetry reduction, and group/transporter upper bounds.
+- Reproducible verified witness restarts, bounds-only and search-node limits,
+  independent VF2 certificate checks, and a fast exact cycle shortcut.
+- Johnson graphs from explicit subset parameters and separate unfinished-bound plots.
 - Exact atlas/catalogue experiments, named families, circulants, random graphs,
   graph6 input, and an external `geng` streaming interface.
 - Native Grassmann graph construction over prime-power finite fields, explicit

@@ -49,13 +49,16 @@ or all partial permutations:
 
 1. Detect ultrahomogeneous graphs with Gardiner's classification: equal-size
    disjoint cliques, their complements, C5, and L(K3,3).
-2. Enumerate automorphisms using NetworkX; return 1 for a rigid nonhomogeneous graph.
-3. Store each transporter x -> y and each point stabilizer as an integer bitset
-   of automorphisms satisfying that constraint.
+2. Obtain the full automorphism group. The enumeration backend uses NetworkX
+   and integer bitsets; the Bliss backend stores generators without enumeration.
+   Return 1 for a rigid nonhomogeneous graph.
+3. Test whether x and y are in the same orbit of the pointwise stabilizer of S.
+   This is equivalent to a nonempty transporter x -> y fixing S.
 4. Search one representative per ordered-pair orbit, using adjacency-compatible
    vertices as possible elements of S.
-5. Intersect constraints using bitwise AND. Stop extending an inconsistent set;
-   skip redundant constraints, which cannot occur in a minimal obstruction.
+5. Intersect bitsets or compute stabilizer orbits. Stop extending an inconsistent
+   set; skip redundant constraints, including earlier constraints that become
+   redundant after adding another vertex.
 6. When an intersection becomes empty, check whether deleting any one fixed-point
    constraint restores an automorphism. Deleting x -> y already leaves the
    identity. Record the largest minimal obstruction and its witness.
@@ -64,12 +67,77 @@ Pair-orbit normalization is valid because conjugating by a graph automorphism
 preserves adjacency, extendability, and minimality. Search pruning only skips
 branches that cannot improve the largest obstruction already proved.
 
+## Generator backend and symmetry
+
+Install the optional `requirements-group.txt` dependencies and select
+`--backend bliss`. `auto` uses enumeration through n=9, and Bliss for larger
+graphs when igraph is installed. Explicit `enumeration` remains available for
+comparison. `--max-automorphisms` limits enumeration only; a group represented
+by generators may have arbitrarily more elements.
+
+Bliss is accessed through igraph. Assigning each vertex of S a different colour
+computes generators of the **full** pointwise stabilizer Aut(G)_(S). Generator
+orbits are found by joining v with g(v) for every generator. No randomly sampled
+subgroup is substituted for the full group. Group orders are exact integers.
+Stabilizers are recomputed on the coloured graph, rather than using a SymPy/GAP
+Schreier-Sims chain; local probes found this faster for the selected families.
+Oracle answers use a bounded LRU cache keyed by fixed vertices and, for symmetry
+queries, the candidate set. Search states are not merged merely because their
+stabilizers coincide: the deletion conditions of a witness can differ.
+
+Ordered-pair representatives are obtained from vertex orbits and the orbits of
+each representative's point stabilizer. During subset search, the symmetry group
+must fix x, y and S pointwise **and preserve the current candidate set setwise**.
+For a representative v of one candidate orbit, the inclusion branch removes only
+v, while the exclusion branch removes the entire orbit. Every subset meeting
+that orbit is equivalent to a subset containing v; subsets missing the orbit
+remain in the exclusion branch. This proves coverage without relying on a
+possibly noninvariant increasing-index suffix.
+
+Cycles of length at least 6 have a separate exact shortcut. Their metric
+expansion is ultrahomogeneous, giving rc <= 2. For four successive vertices
+a,b,c,d, identity on {d} plus a -> b preserves nonadjacency but changes distance
+3 to distance 2. This is a size-2 minimal obstruction. Explicit enumeration
+retains the general path for independent comparisons.
+
+## Verified witness search and upper bounds
+
+Before exhaustive Bliss search, reproducible greedy restarts try different
+constraint orders. A nonextendable set is reduced by deletion, and every
+one-vertex deletion is checked before recording a witness. These certificates
+prove lower bounds only. Restarts are controlled by `--heuristic-trials` and
+`--search-seed`; their scheduling budget is up to two seconds and at most one
+quarter of the per-graph timeout, checked between complete trials.
+
+`--bounds-only` skips exhaustive subset search. `--max-search-nodes` bounds
+exhaustive search deterministically. Statuses `bounded`, `node_limit`, and
+`timeout` leave rc empty unless proved lower and upper bounds already coincide.
+Setting heuristic trials to zero disables restarts and is incompatible with
+`--bounds-only`. The enumeration backend also supports bounds-only witness
+search; its restarts use the graph's overall cooperative timeout.
+
+For a minimal normalized obstruction, every fixed vertex strictly decreases a
+point stabilizer. Each strict subgroup index is at least 2, so
+`rc <= 1 + floor(log2(|Aut(G)|))`, combined with `rc <= n-1`.
+For a nonempty transporter of size c, each strict nonempty intersection also
+has index at least 2: at most `floor(log2(c))` such steps and one final empty
+step remain. A branch with s fixed vertices therefore cannot exceed
+`s + floor(log2(c)) + 2`. Pair bounds additionally use the number of eligible
+vertices. If fixing all eligible vertices still permits x -> y, that pair
+contains no obstruction. These are mathematical bounds, not fitted trends.
+
+`verify_witness` provides a separate certificate check using joint colour
+refinement and VF2 isomorphism, rather than Bliss stabilizer orbits. It checks graph
+adjacency, nonextendability, and every deletion of a normalized obstruction of
+size >= 2. Its default 30-second cooperative limit raises TimeoutError if verification
+cannot finish; an unfinished check never reports that a certificate is invalid.
+
 ## Bounds, coverage, and padding
 
-An unfinished search returns no exact rc value. It retains the largest proved
-obstruction and the general upper bound. The default limits are cooperative,
-including during automorphism enumeration; the classification shortcut precedes
-those limit checks. A limit is not a strict operating-system deadline.
+An unfinished search retains the largest proved obstruction and its proved upper
+bound. The default limits are cooperative, including native isomorphism calls;
+classification shortcuts precede limit checks. A limit is not a strict
+operating-system deadline. Reaching equal bounds certifies the individual value.
 
 An exact graph value is not automatically an exact extremal maximum. Certification
 requires exhaustive source coverage and sufficient per-graph bounds. The complete
@@ -83,8 +151,9 @@ retains obstructions arising from repeated noncomplete components. The resulting
 `padded_lower_bound` is a nondecreasing lower envelope as n increases. It is
 separate from the observed maximum directly measured at each order.
 
-The current backend still enumerates the full automorphism group and searches
-subsets exponentially in the worst case. Tests independently enumerate all induced
-partial isomorphisms through n = 6 and check examples, witnesses, complements,
-relabelling, bounds, and interrupted/retried experiments. These checks support
-correctness within their scope; they do not settle an asymptotic growth conjecture.
+Subset search remains exponential in the worst case. Tests independently
+enumerate induced partial isomorphisms through n=6, compare both backends on all
+1,253 atlas graphs through n=7, and check stabilizer orders and transporters against
+explicit groups. Larger certificates are checked by VF2. Cache eviction,
+complements, relabelling, bounds, and interrupted/retried experiments are covered.
+These checks do not settle an asymptotic growth conjecture.

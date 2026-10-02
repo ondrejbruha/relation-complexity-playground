@@ -68,7 +68,7 @@ class ComplexityTests(unittest.TestCase):
     def test_limits_are_not_reported_as_exact_values(self):
         for kwargs, status in [({"max_automorphisms": 1}, "automorphism_limit"),
                                ({"timeout": 1e-12}, "timeout")]:
-            result = compute_relational_complexity(nx.petersen_graph(), **kwargs)
+            result = compute_relational_complexity(nx.petersen_graph(), backend="enumeration", **kwargs)
             self.assertIsNone(result.rc)
             self.assertEqual(result.status, status)
             self.assertLessEqual(result.lower_bound, 3)

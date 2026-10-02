@@ -25,7 +25,16 @@ python main.py --mode atlas --max-n 7 --workers 4 --output results/atlas
 ```
 
 Na Linuxu/macOS aktivuj prostředí pomocí `source .venv/bin/activate` a používej
-stejné příkazy `python`. Přímé závislosti jsou pouze NetworkX a matplotlib.
+stejné příkazy `python`. Základní závislosti jsou NetworkX a matplotlib.
+Pro větší symetrické grafy nainstaluj také igraph a použij backend s generátory:
+
+```powershell
+python -m pip install -r requirements-group.txt
+python main.py --mode families --families grassmann --grassmann 2,4,2 2,5,2 2,6,2 --max-n 651 --backend bliss --workers 2 --timeout 30 --output results/grassmann-bliss
+```
+
+Výchozí `--backend auto` používá enumeraci do 9 vrcholů, pro větší grafy Bliss,
+pokud je igraph nainstalovaný. Bez něj zůstává dostupný původní backend.
 
 Režim `atlas` zahrnuje **všechny** neizomorfní jednoduché grafy do 7 vrcholů,
 včetně nesouvislých. Režim `catalog` přidává úplné katalogy pro N = 8 a 9
@@ -59,11 +68,13 @@ Spouštěj jednu zapisující instanci na výstupní adresář.
 
 - `experiment.sqlite`: checkpoint po **každém** grafu, i pokud se podaří pouze meze.
 - `values.csv`: jednotlivé grafy v graph6, přesná hodnota nebo meze, stav výpočtu,
-  čas, počet automorfismů a svědek minimální překážky rozšíření.
+  svědek minimální překážky, backend, časy grupové a vyhledávací fáze,
+  počet generátorů, dotazů na stabilizátor a zásahů cache.
 - `summary.csv`: maxima, počty hotových a nehotových grafů, průměr pouze přes přesně
   dokončené výpočty, horní mez a příznak `maximum_certified`.
 - `distribution.csv`: četnosti jednotlivých přesných hodnot podle N.
-- `plot.png`, `plot.svg`: lineární pohled a pohled s logaritmickou osou N.
+- `plot.png`, `plot.svg`: přesné hodnoty v lineárním a logaritmickém pohledu;
+  samostatný panel s intervaly nedokončených výpočtů, pokud existují.
 - `extremal_candidates.g6`: jeden kandidát pro každé N v pořadí řádků summary.csv;
   případně lepší menší graf doplněný izolovanými vrcholy.
 
@@ -80,9 +91,10 @@ dané velikosti. `padded_lower_bound` využívá i menší grafy: doplnění izo
 vrcholy vysokou komplexitu neztrácí.
 Tato dolní mez proto neklesá, i když zrovna pro další N zkoušíme slabší kandidáty.
 
-Plné body označují certifikovaná přesná maxima **v rámci algoritmu a úplného
-zdrojového katalogu**. Prázdné trojúhelníky jsou pouze dolní meze pro globální
-maximum. `global_upper_bound` využívá meze všech grafů, je-li enumerace kompletní;
+Barevné body rodin jsou přesné hodnoty jednotlivých grafů. Certifikovaná globální
+maxima mají vlastní značku a vyžadují úplný zdrojový katalog. Přenesená dolní
+mez je slabá přerušovaná schodová čára. Nedokončené grafy mají vlastní panel
+s dolní a horní mezí. `global_upper_bound` využívá meze všech grafů, je-li enumerace kompletní;
 jinak používá obecnou mez N - 1 pro N >= 1. Čára log2(N) je pouze referenční
 křivka. Nemá význam dokázané horní nebo dolní meze ani automatického fitu.
 
@@ -96,7 +108,7 @@ rodin; samotná jedna rodina nemůže určit globální maximum.
 .venv\Scripts\python.exe main.py --mode circulant --min-n 6 --max-n 20 --samples 1000 --workers 4 --output results/circulants
 ```
 
-`families` počítá skutečné grafy obecným algoritmem:
+`families` počítá skutečné grafy; cykly mají navíc přesnou strukturální zkratku:
 
 - `cycle`: cykly, vhodná kontrolní rodina; od C6 mají komplexitu 2.
 - `cube`: hyperkrychle Qd na 2^d vrcholech.
@@ -106,6 +118,9 @@ rodin; samotná jedna rodina nemůže určit globální maximum.
   o KG(5,2) a KG(7,3). Kneserovo N **není** parametr k, ale binom(2k+1,k).
 - `grassmann`: grafy J_q(d,k) nad konečným tělesem GF(q), kde q je mocnina
   prvočísla. Je potřeba je výslovně vybrat; nejsou ve výchozím seznamu rodin.
+- `johnson`: grafy J(m,k), jejichž vrcholy jsou k-prvkové podmnožiny m-prvkové
+  množiny. Vyber je výslovně a zadej `--johnson 7,3 8,4`; N je binom(m,k).
+  Výchozí parametry jsou 8,4 a konstrukční limit `--johnson-max-vertices` je 2 000.
 - `path`, `complete`, `bipartite`: další kontrolní rodiny; poslední znamená
   K(floor(N/2),ceil(N/2)).
 
@@ -117,8 +132,8 @@ ve výsledcích. Režim není určen k odhadu pravděpodobnostního rozdělení.
 
 Pro vyšší komplexity jsou zvlášť zajímavé Johnsonovy/Kneserovy grafy, Grassmannovy
 grafy a katalogy silně regulárních grafů. Grassmannův graf J2(5,2) už má
-155 vrcholů; současný backend s enumerací automorfismů pro tuto velikost není
-praktická cesta. Teoretické hodnoty a meze je potřeba označovat zvlášť od měření.
+155 vrcholů; pro tuto velikost používej Bliss. Generátory odstraní enumeraci
+automorfismů, ale hledání překážek může stále dosáhnout limitu.
 
 Náhodné G(N,p) grafy mají často triviální automorfismy, a potom rc = 1. Hodí se
 ke kontrole nebo studiu typických hodnot, nikoli jako hlavní hledání maxima:
@@ -152,9 +167,9 @@ Výběr parametrů lze ve stejném výstupním adresáři rozšířit; dřívěj
 zůstávají v databázi a exportech. Nedokončené výpočty opakuje `--retry-incomplete`.
 
 Generování tří uvedených grafů při místním ověření trvalo méně než sekundu.
-J_2(4,2) však při výpočtu rc narazil na limit 30 sekund již při enumeraci
-automorfismů. Uložily se pouze meze 1 <= rc <= 34. Pro smysluplné přesné výsledky
-větších grafů bude potřeba rychlejší backend grupové akce. Podrobnosti, nebinární
+Původní enumerace u J_2(4,2) narazila na limit 30 sekund. Bliss tento graf
+spočítal přesně s rc = 5 a jeho svědek prošel nezávislou kontrolou VF2.
+Větší grafy průběžně získávají ověřené meze. Podrobnosti, nebinární
 příklady a Python API jsou v [docs/grassmann.md](docs/grassmann.md).
 
 ## Větší úplné enumerace a vlastní katalogy
@@ -210,33 +225,45 @@ automorfismus g. Složením s g^(-1) dostaneme ekvivalentní překážku ve tvar
 uspořádané n-tice nebo všechny částečné permutace:
 
 1. Rozpoznáme ultrahomogenní grafy pomocí Gardinerovy klasifikace a vrátíme 0.
-2. NetworkX spočítá automorfismy. U rigidního nehomogenního grafu vrátíme 1.
-3. Každou podmínku x -> y a každý stabilizátor vrcholu reprezentujeme bitsetem
-   automorfismů, které podmínku splňují.
+2. Získáme celou automorfismovou grupu: NetworkX vypíše prvky, Bliss pouze
+   generátory. U rigidního nehomogenního grafu vrátíme 1.
+3. Rozšiřitelnost identity na S a x -> y rozhoduje, zda x a y leží ve stejné
+   orbitě bodového stabilizátoru S. Ten Bliss získá pomocí jedinečných barev
+   fixovaných vrcholů; enumerace používá bitsety.
 4. U dvojice (x,y) stačí jeden zástupce její orbity. S může obsahovat jen vrcholy,
    které mají stejnou sousednost k x i y, aby šlo o částečný izomorfismus grafu.
-5. Průnik podmínek pomocí celočíselných AND zjistí rozšiřitelnost. Nerozšiřitelné
-   větve dále nerozvíjíme; redundantní podmínky nemohou být v minimální překážce.
+5. Průniky nebo stabilizátory rozhodují rozšiřitelnost. Nerozšiřitelné větve
+   dále nerozvíjíme; redundantní podmínky nemohou být v minimální překážce.
+   Bliss omezuje výběry S pomocí symetrií zachovávajících i zbývající kandidáty.
 6. Po dosažení prázdného průniku zkontrolujeme, že odstranění libovolné podmínky
    opět dává neprázdný průnik. Uložíme největší překážku a jejího svědka.
 
-V nejhorším případě zůstává exponenciální hledání podmnožin a enumerace celé
-automorfismové grupy. Není to polynomiální algoritmus. Vyhýbá se ale n^k
+V nejhorším případě zůstává exponenciální hledání podmnožin. Enumeraci celé
+grupy provádí pouze původní backend. Vyhýbáme se n^k
 tabulkám a testování všech n! obecných permutací z draftu.
 
 ## Limity, paralelismus a GPU
 
-Výchozí limit je 30 sekund a 100 000 automorfismů **na graf**. Limit je
-kooperativní: jednotlivé interní hledání v NetworkX může běžet déle do další
-kontroly. Při limitu je `rc` prázdné a ukládají se prokázané meze. Silnější
+Výchozí limit je 30 sekund na graf. Limit 100 000 automorfismů se vztahuje
+jen na enumeraci, nikoli na řád grupy v backendu Bliss. Limit je kooperativní:
+jednotlivé interní hledání může běžet déle do další kontroly.
+Při limitu je `rc` prázdné a ukládají se prokázané meze; shodné meze dávají
+přesnou hodnotu. Silnější
 již uložená dolní mez se při opakování neztratí. Zkusit nedokončené grafy znovu:
 
 ```powershell
 .venv\Scripts\python.exe main.py --mode catalog --max-n 9 --timeout 120 --max-automorphisms 500000 --retry-incomplete --workers 4 --plot-every 25000 --output results/catalog
 ```
 
-Hodnota 0 u obou limitů znamená neomezený běh. Počet pracovníků nastav podle
-CPU a paměti; každý proces má vlastní automorfismy a bitsety. Default je nejvýše
+`--max-search-nodes` omezuje počet uzlů úplného hledání. `--bounds-only`
+spouští pouze hledání ověřených svědků, bez úplné certifikace. Jejich různé
+starty nastavuje `--heuristic-trials` (výchozí 8) a `--search-seed` (výchozí 0).
+Heuristika dokazuje dolní mez, přesnost pouze při shodě s dokázanou horní mezí.
+Funkce `verify_witness` ověřuje normalizované překážky nezávislým VF2.
+
+Hodnota 0 u časového a početních limitů znamená neomezený běh. Počet pracovníků
+nastav podle CPU a paměti; každý proces má vlastní bitsety nebo omezenou cache
+stabilizátorů. Default je nejvýše
 4 pracovníci. Při přenosu na druhý stroj přenes celý výstupní adresář až po
 skončení zapisujícího procesu, včetně případných SQLite WAL souborů.
 
@@ -246,11 +273,10 @@ do PyTorch/CUDA automaticky nepomůže; smysluplný GPU backend by potřeboval
 dávkovat vhodnou část hledání. Současné zrychlení využívá bitsety, symetrie
 a paralelní výpočet různých grafů na CPU.
 
-Další rozumný krok pro větší symetrické grafy je backend s generátory grupy
-(nauty/Traces nebo bliss) a operacemi se stabilizátory, aby se neukládaly všechny
-automorfismy. Až po profilování takového backendu má smysl rozhodovat o GPU.
-Pro velké Grassmannovy grafy bude vhodnější využít přímo známou geometrickou
-akci a ověřené teoretické meze než obecný grafový brute-force.
+Bliss backend s generátory a operacemi se stabilizátory je implementovaný.
+Další vývoj může využít přímou geometrickou akci a silnější teoretické meze
+pro velké Grassmannovy grafy. Současný výpočet používá celou automorfismovou
+grupu grafu, včetně případných dodatečných symetrií.
 
 ## Ověřené výsledky a testy
 
@@ -270,7 +296,8 @@ meze pro f(N), nikoli přesná maxima pro N = 10, 16, 25, 32 či 35.
 ```
 
 Testy porovnávají všechny grafy do 6 vrcholů s nezávislým úplným výpočtem přes
-částečná izomorfní zobrazení. Ověřují také známé příklady, komplementaci,
+částečná izomorfní zobrazení a oba backendy na všech 1 253 atlasových grafech
+do 7 vrcholů. Ověřují také stabilizátory proti úplné grupě, známé příklady, komplementaci,
 přejmenování vrcholů, svědka překážky, limity, přerušení/navázání, integritu
 mezí a odmítnutí nesrovnatelných datasetů.
 
