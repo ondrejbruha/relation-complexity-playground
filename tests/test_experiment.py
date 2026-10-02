@@ -15,6 +15,54 @@ import experiment
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_upper_bound_fit_recovers_known_power_law(self):
+        records = [{"n": n, "upper_bound": upper}
+                   for n, upper in [(4, 6), (16, 12), (64, 24), (256, 48)]]
+        fit = experiment._upper_bound_fit(records)
+        self.assertAlmostEqual(fit["coefficient"], 3)
+        self.assertAlmostEqual(fit["exponent"], 0.5)
+        self.assertAlmostEqual(fit["r_squared"], 1)
+        self.assertAlmostEqual(fit["rmse"], 0)
+        self.assertEqual((fit["n_min"], fit["n_max"], fit["point_count"]), (4, 256, 4))
+
+    def test_upper_bound_fit_requires_three_distinct_positive_orders_and_bounds(self):
+        for records in ([], [{"n": 4, "upper_bound": 3}, {"n": 8, "upper_bound": 5}],
+                        [{"n": 4, "upper_bound": 3}] * 3,
+                        [{"n": n, "upper_bound": 3} for n in (0, 4, 8)],
+                        [{"n": n, "upper_bound": upper} for n, upper in [(4, 0), (8, 3), (16, 4)]]):
+            with self.subTest(records=records):
+                self.assertIsNone(experiment._upper_bound_fit(records))
+        fit = experiment._upper_bound_fit([{"n": n, "upper_bound": 4} for n in (16, 25, 36)])
+        self.assertAlmostEqual(fit["coefficient"], 4)
+        self.assertAlmostEqual(fit["exponent"], 0)
+        self.assertEqual(fit["r_squared"], 1)
+
+    def test_family_export_fits_only_unfinished_upper_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            with contextlib.closing(experiment.open_database(output / "test.sqlite", {"engine": "test"})) as db:
+                for side in (3, 4, 5, 7):
+                    graph = nx.convert_node_labels_to_integers(nx.line_graph(nx.complete_bipartite_graph(side, side)))
+                    exact = side == 4
+                    experiment.save_result(db, {"task_id": f"family:rook:{len(graph)}",
+                                                "label": "rook", "graph6": experiment.graph_code(graph),
+                                                "n": len(graph), "rc": 4 if exact else None,
+                                                "lower_bound": 4, "upper_bound": 4 if exact else 2 * side,
+                                                "status": "exact" if exact else "bounded"})
+                experiment.export(db, output, "families")
+                with (output / "upper_bound_fits.csv").open(encoding="utf-8", newline="") as stream:
+                    fits = list(csv.DictReader(stream))
+                self.assertEqual(len(fits), 1)
+                self.assertEqual(fits[0]["family"], "rook")
+                self.assertEqual(int(fits[0]["point_count"]), 3)
+                self.assertAlmostEqual(float(fits[0]["coefficient"]), 2)
+                self.assertAlmostEqual(float(fits[0]["exponent"]), 0.5)
+                svg = (output / "plot.svg").read_text(encoding="utf-8")
+                self.assertIn("upper-bound fit (not a bound)", svg)
+                # Another export must not retain a fit that no longer applies.
+                experiment.export(db, output, "graph6")
+                self.assertFalse((output / "upper_bound_fits.csv").exists())
+
     def test_family_sampling_preserves_sparse_families_and_range_endpoints(self):
         args = experiment.parser().parse_args([
             "--mode", "families", "--families", "cube", "rook", "kneser", "cycle",

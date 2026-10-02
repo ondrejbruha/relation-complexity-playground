@@ -401,6 +401,42 @@ def _csv(path, records):
     temporary.replace(path)
 
 
+def _family_label(record):
+    parts = record["task_id"].split(":")
+    if len(parts) >= 2 and parts[0] == "family":
+        if parts[1] == "grassmann" and len(parts) == 6:
+            return f"Grassmann q={parts[3]}, k={parts[5]}"
+        return parts[1]
+    return record["label"]
+
+
+def _upper_bound_fit(records):
+    """Fit U(n) = a*n**b by least squares in log space, within sampled orders.
+
+    The fitted curve describes saved upper bounds; it is not itself a bound.
+    Require three distinct positive orders, so two points cannot imply a fit.
+    """
+    if len({r["n"] for r in records}) < 3 or any(
+            r["n"] <= 0 or r["upper_bound"] <= 0 for r in records):
+        return None
+    xs = [math.log(r["n"]) for r in records]
+    ys = [math.log(r["upper_bound"]) for r in records]
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    exponent = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / sum(
+        (x - mean_x) ** 2 for x in xs)
+    coefficient = math.exp(mean_y - exponent * mean_x)
+    actual = [r["upper_bound"] for r in records]
+    predicted = [coefficient * r["n"] ** exponent for r in records]
+    residual = sum((value - estimate) ** 2 for value, estimate in zip(actual, predicted))
+    mean_upper = sum(actual) / len(actual)
+    total = sum((value - mean_upper) ** 2 for value in actual)
+    return {"coefficient": coefficient, "exponent": exponent,
+            "r_squared": 1 - residual / total if total else 1.0,
+            "rmse": math.sqrt(residual / len(records)), "point_count": len(records),
+            "n_min": min(r["n"] for r in records), "n_max": max(r["n"] for r in records)}
+
+
 def export(db, directory, mode):
     records, summary = summaries(db)
     if not records:
@@ -466,22 +502,18 @@ def export(db, directory, mode):
                          alpha=0.7, label="log2(n), reference curve only")
         else:
             axes[1].set_xlabel("Number of vertices n (linear; dataset includes n=0)")
+        family_colors = {label: f"C{index % 10}" for index, label in enumerate(
+            sorted({_family_label(r) for r in records}))} if mode == "families" else {}
         if mode == "families":
-            def family_label(record):
-                parts = record["task_id"].split(":")
-                if len(parts) >= 2 and parts[0] == "family":
-                    if parts[1] == "grassmann" and len(parts) == 6:
-                        return f"Grassmann q={parts[3]}, k={parts[5]}"
-                    return parts[1]
-                return record["label"]
             groups = {}
             for record in exact:
-                groups.setdefault(family_label(record), []).append(record)
-            for color_index, (label, group) in enumerate(sorted(groups.items())):
-                color = f"C{color_index % 10}"
+                groups.setdefault(_family_label(record), []).append(record)
+            for label, group in sorted(groups.items()):
+                color = family_colors[label]
                 for ax in axes:
                     ax.scatter([r["n"] for r in group], [r["rc"] for r in group],
                                s=22, alpha=0.75, color=color, label=label, zorder=4)
+        fits = []
         if incomplete:
             bounds_ax = all_axes[2]
             bounds_ax.vlines([r["n"] for r in incomplete],
@@ -490,8 +522,30 @@ def export(db, directory, mode):
             bounds_ax.scatter([r["n"] for r in incomplete], [r["lower_bound"] for r in incomplete],
                               marker="^", facecolors="white", edgecolors="#b45309", s=24,
                               label="Verified lower bound")
-            bounds_ax.scatter([r["n"] for r in incomplete], [r["upper_bound"] for r in incomplete],
-                              marker="_", color="#64748b", s=24, label="Proven upper bound")
+            if mode == "families":
+                groups = {}
+                for record in incomplete:
+                    groups.setdefault(_family_label(record), []).append(record)
+                for label, group in sorted(groups.items()):
+                    color = family_colors[label]
+                    bounds_ax.scatter([r["n"] for r in group], [r["upper_bound"] for r in group],
+                                      marker="_", color=color, s=36,
+                                      label=f"{label}: proven upper bounds ({len(group)})", zorder=4)
+                    fit = _upper_bound_fit(group)
+                    if fit is None:
+                        continue
+                    fits.append({"family": label, "model": "a * n^b", "method": "log-space least squares",
+                                 **fit})
+                    orders = [math.exp(math.log(fit["n_min"]) + index / 199
+                                       * math.log(fit["n_max"] / fit["n_min"])) for index in range(200)]
+                    bounds_ax.plot(orders, [fit["coefficient"] * n ** fit["exponent"] for n in orders],
+                                   linestyle="--", linewidth=1.5, color=color,
+                                   label=(f"{label}: upper-bound fit (not a bound)\n"
+                                          f"U(n) = {fit['coefficient']:.3g} n^{fit['exponent']:.3f}, "
+                                          f"R² = {fit['r_squared']:.4f}"))
+            else:
+                bounds_ax.scatter([r["n"] for r in incomplete], [r["upper_bound"] for r in incomplete],
+                                  marker="_", color="#64748b", s=24, label="Proven upper bound")
             if all(r["n"] > 0 for r in incomplete):
                 logarithmic_orders(bounds_ax, [r["n"] for r in incomplete])
             bounds_ax.set_yscale("symlog", linthresh=2)
@@ -504,6 +558,11 @@ def export(db, directory, mode):
                 statuses[record["status"]] = statuses.get(record["status"], 0) + 1
             bounds_ax.text(0.02, 0.02, ", ".join(f"{key}: {count}" for key, count in sorted(statuses.items())),
                            transform=bounds_ax.transAxes, fontsize=7)
+        fit_path = directory / "upper_bound_fits.csv"
+        if fits:
+            _csv(fit_path, fits)
+        else:
+            fit_path.unlink(missing_ok=True)
         for ax in axes:
             top = max([max(line.get_ydata()) for line in ax.lines] + [r["rc"] for r in exact] + [0])
             ax.set_ylim(-0.15, max(0.75, top + 0.3))

@@ -179,6 +179,7 @@ comparison or a different dataset mode, random seed, probability, or input file.
 | `summary.csv` | Counts, observed maxima, bounds, and `maximum_certified` |
 | `distribution.csv` | Counts of exact values at each graph order |
 | `plot.png`, `plot.svg` | Exact values in linear/logarithmic views; a separate unfinished-bounds panel when needed |
+| `upper_bound_fits.csv` | Power-law coefficients, R² on the original scale, RMSE, counts, and sampled ranges when family upper-bound fits exist |
 | `extremal_candidates.g6` | One candidate per summary row, including isolated-vertex padding |
 
 `observed_lower_bound` uses the graphs directly examined at that order.
@@ -187,6 +188,13 @@ vertices. The padded lower bound is a faint dashed step curve, not a measured
 family curve. Both main panels show exact graph values; certified global maxima
 have separate markers. Unfinished graphs appear as lower/upper intervals in their
 own panel. The `log2(n)` curve is a visual reference, not a proved bound or fit.
+For family datasets, the unfinished panel also fits `U(n) = a * n^b` to each
+family's saved upper bounds when at least three distinct positive orders and
+positive bounds are available. Coefficients use least squares in log space;
+R² and RMSE are evaluated on the original upper-bound scale. Curves stay within
+the sampled range and describe upper estimates, not exact rc values or new
+proved bounds. The fit uses only unfinished graphs and is saved in
+`upper_bound_fits.csv`; families with fewer sizes retain their markers without a fit.
 Means and distributions include only completed exact computations, which may
 bias them if searches reached limits. [Details of the conventions](docs/algorithm.md).
 

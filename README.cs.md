@@ -75,6 +75,8 @@ Spouštěj jednu zapisující instanci na výstupní adresář.
 - `distribution.csv`: četnosti jednotlivých přesných hodnot podle N.
 - `plot.png`, `plot.svg`: přesné hodnoty v lineárním a logaritmickém pohledu;
   samostatný panel s intervaly nedokončených výpočtů, pokud existují.
+- `upper_bound_fits.csv`: koeficienty mocninných fitů horních mezí rodin, R²
+  v původním měřítku, RMSE, počty bodů a rozsahy N; vzniká, pokud existuje fit.
 - `extremal_candidates.g6`: jeden kandidát pro každé N v pořadí řádků summary.csv;
   případně lepší menší graf doplněný izolovanými vrcholy.
 
@@ -97,6 +99,15 @@ mez je slabá přerušovaná schodová čára. Nedokončené grafy mají vlastn�
 s dolní a horní mezí. `global_upper_bound` využívá meze všech grafů, je-li enumerace kompletní;
 jinak používá obecnou mez N - 1 pro N >= 1. Čára log2(N) je pouze referenční
 křivka. Nemá význam dokázané horní nebo dolní meze ani automatického fitu.
+
+U rodin poslední panel prokládá jejich horní meze mocninnou křivkou
+`U(N) = a * N^b`, pokud jsou k dispozici alespoň tři různé kladné velikosti
+a kladné horní meze. Koeficienty se počítají metodou nejmenších čtverců
+v logaritmickém měřítku; R² a RMSE se vyhodnocují v původním měřítku horních mezí.
+Fit zahrnuje pouze nedokončené grafy a kreslí se pouze v rozsahu jejich velikostí.
+Popisuje horní odhady, nikoli přesné rc ani novou dokázanou mez. Rovnice a R²
+jsou v legendě, podrobnosti v `upper_bound_fits.csv`. Rodiny s méně velikostmi
+zůstávají bez fitu.
 
 ## Které grafy dávají smysl pro výzkum
 
