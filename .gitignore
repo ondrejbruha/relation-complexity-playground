@@ -1,0 +1,28 @@
+# Environments, IDE state, and Python caches
+.venv/
+venv/
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated experiments and temporary files
+results/
+tmp/
+*.sqlite
+*.sqlite-*
+*.db
+*.pdf
+
+# Build outputs and local configuration
+build/
+dist/
+*.egg-info/
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

@@ -1,0 +1,15 @@
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.csv text eol=lf
+*.g6 text eol=lf
+# Matplotlib emits intentional whitespace in generated SVG path data.
+*.svg text eol=lf whitespace=-blank-at-eol
+LICENSE text eol=lf
+*.png binary

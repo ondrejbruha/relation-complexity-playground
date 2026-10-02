@@ -1,0 +1,10 @@
+n,processed,exact_count,incomplete_count,mean_rc_exact,max_rc_exact,observed_lower_bound,padded_lower_bound,global_upper_bound,expected_count,maximum_certified,representative_graph6,padded_graph6
+1,1,1,0,0.0,0,0,0,0,1,True,@,@
+2,2,2,0,0.0,0,0,0,0,2,True,A?,A?
+3,4,4,0,0.5,1,1,1,1,4,True,BG,BG
+4,11,11,0,0.6363636363636364,1,1,1,1,11,True,CB,CB
+5,34,34,0,0.9117647058823529,1,1,1,1,34,True,D?C,D?C
+6,156,156,0,1.0384615384615385,2,2,2,2,156,True,EhEG,EhEG
+7,1044,1044,0,1.0747126436781609,2,2,2,2,1044,True,FhENw,FhENw
+8,12346,12346,0,1.0721691236027864,2,2,2,2,12346,True,GCre][,GCre][
+9,274668,274668,0,1.0380859801651448,2,2,2,2,274668,True,H?bauzi,H?bauzi
